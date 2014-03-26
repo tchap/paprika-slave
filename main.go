@@ -109,8 +109,7 @@ func getenvOrFailNow(value *string, key string, defaultValue string) {
 
 	// Read the value from the environment.
 	if v := os.Getenv(key); v == "" {
-		color.Fprintf("\n@{r}Error: %v is not set\n", key)
-		os.Exit(2)
+		log.Fatalf("Error: %v is not set", key)
 	} else {
 		*value = v
 	}
