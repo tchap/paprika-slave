@@ -37,11 +37,6 @@ import (
 
 const TokenHeader = "X-Paprika-Token"
 
-// This map contains all the script runners that are to be registered at slave
-// startup. The content will vary depending on the platform. For example, PowerShell
-// will not be available on Linux or Mac OS X, naturally.
-var runners = make(map[string]rpc.RequestHandler)
-
 func main() {
 	log.SetFlags(0)
 
@@ -49,7 +44,7 @@ func main() {
 	fidentity := flag.String("identity", "", "build slave unique identity")
 	fmaster := flag.String("master", "", "master node to connect to")
 	ftoken := flag.String("token", "", "master node access token")
-	ftags := flag.String("tags", "", "tags to apply to this build slave")
+	flabels := flag.String("labels", "", "labels to apply to this build slave")
 	fexecutors := flag.Int("executors", runtime.NumCPU(), "number of executors")
 	fworkspace := flag.String("workspace", "", "build workspace")
 
@@ -57,14 +52,15 @@ func main() {
 	getenvOrFailNow(fidentity, "PAPRIKA_IDENTITY", "")
 	getenvOrFailNow(fmaster, "PAPRIKA_MASTER", "")
 	getenvOrFailNow(ftoken, "PAPRIKA_TOKEN", "")
-	getenvOrFailNow(ftags, "PAPRIKA_TAGS", "")
+	getenvOrFailNow(ftags, "PAPRIKA_LABELS", "")
 	getenvOrFailNow(fworkspace, "PAPRIKA_WORKSPACE", "")
 
 	// Start catching signals.
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Connect to the master node.
+	// Connect to the master node using the WebSocket transport.
+	// The specified token is used to authenticated the build slave.
 	srv, err := rpc.NewService(func() (rpc.Transport, error) {
 		factory := ws.NewTransportFactory()
 		factory.Server = *fmaster
@@ -77,13 +73,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Export relevant methods.
-	tags := strings.Split(*ftags, ",")
-	for runner, handler := range runners {
-		for _, tag := range tags {
-			method := tag + "." + runner
-			srv.MustRegister(method, handler)
-			log.Printf("--> method %v exported\n", method)
+	// Number of concurrent builds is limited by creating a channel of the
+	// specified length. Every time a build is requested, the request handler
+	// sends some data to the channel, and when it is finished, it reads data
+	// from the same channel.
+	executorCh := make(chan bool, *fexecutors)
+
+	// Export all available runners.
+	for _, label := range strings.Split(*flabels, ",") {
+		for _, runner := range runners.Available {
+			methodName := label + "." + runner.Name
+			builder := &Builder{runner, *fworkspace, executorCh}
+			srv.MustRegister(methodName, builder.Build)
+			log.Printf("--> method %v exported\n", methodName)
 		}
 	}
 
@@ -108,9 +110,10 @@ func getenvOrFailNow(value *string, key string, defaultValue string) {
 	}
 
 	// Read the value from the environment.
-	if v := os.Getenv(key); v == "" {
-		log.Fatalf("Error: %v is not set", key)
-	} else {
-		*value = v
+	v := os.Getenv(key)
+	if v == "" {
+		log.Fatalf("Error: %v is not set and neither is the relevant flag", key)
 	}
+
+	*value = v
 }
