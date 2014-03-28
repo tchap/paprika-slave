@@ -22,13 +22,13 @@ import (
 
 	"github.com/salsita-cider/paprika/data"
 
-	"github.com/cider/go-cider/services/rpc"
+	"github.com/cider/go-cider/cider/services/rpc"
 	"github.com/salsita-cider/paprika-slave/runners"
 )
 
 type Builder struct {
 	runner    *runners.Runner
-	wsManager *WorkspaceManager
+	manager   *WorkspaceManager
 	execQueue chan bool
 }
 
@@ -50,14 +50,14 @@ func (builder *Builder) Build(request rpc.RemoteRequest) {
 
 	// Generate the project workspace and make sure it exists.
 	repoURL, _ := url.Parse(args.Repository)
-	workspace, err := builder.wsManager.EnsureWorkspace(repoURL)
+	workspace, err := builder.manager.EnsureWorkspaceExists(repoURL)
 	if err != nil {
 		request.Resolve(4, &data.BuildResult{Error: err.Error()})
 		return
 	}
 
 	// Acquire the workspace lock.
-	wsQueue := builder.wsManager.WorkspaceQueue(workspace)
+	wsQueue := builder.manager.WorkspaceQueue(workspace)
 	if err := acquire("the workspace lock", wsQueue, request); err != nil {
 		request.Resolve(5, &data.BuildResult{Error: err})
 		return
@@ -75,14 +75,16 @@ func (builder *Builder) Build(request rpc.RemoteRequest) {
 	startTimestamp := time.Now()
 
 	// Check out the sources at the right revision.
-	var (
-		srcDir       = builder.wsManager.SrcDir(workspace)
-		srcDirExists = builder.wsManager.SrcDirExists(workspace)
-	)
+	srcDir := builder.manager.SrcDir(workspace)
+	srcDirExists, err := builder.manager.SrcDirExists(workspace)
+	if err != nil {
+		resolve(request, 6, startTimestamp, err)
+		return
+	}
 
 	vcs, err := vcsutil.NewVCS(repoURL.Scheme)
 	if err != nil {
-		resolve(request, 6, startTimestamp, err)
+		resolve(request, 7, startTimestamp, err)
 		return
 	}
 
@@ -92,7 +94,7 @@ func (builder *Builder) Build(request rpc.RemoteRequest) {
 		err = vcs.Clone(repoURL, srcDir, request)
 	}
 	if err != nil {
-		resolve(request, 7, startTimestamp, err)
+		resolve(request, 8, startTimestamp, err)
 		return
 	}
 
@@ -108,9 +110,9 @@ func (builder *Builder) Build(request rpc.RemoteRequest) {
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
-	fmt.Fprintf(stdout, "---> Running the specified script: %v\n", args.Script)
+	fmt.Fprintf(stdout, "+---> Running the script: %v\n", args.Script)
 	err = executil.Run(cmd, request.Interrupted())
-	fmt.Fprintln(stdout, "---> Build finished")
+	fmt.Fprintln(stdout, "+---> Build finished")
 	if err != nil {
 		resolve(request, 1, startTimestamp, err)
 		return
@@ -118,6 +120,28 @@ func (builder *Builder) Build(request rpc.RemoteRequest) {
 
 	// Return success, at last.
 	resolve(request, 0, startTimestamp, nil)
+}
+
+func acquire(what string, queue chan bool, request rpc.RemoteRequest) (err string) {
+	stdout := request.Stdout()
+	fmt.Fprintf(stdout, "+---> Trying to acquire %v\n", desc)
+	for {
+		select {
+		case queue <- true:
+			fmt.Fprintf(stdout, "+---> Success", s)
+			return
+		case <-request.Interrupted():
+			fmt.Fprintln(stdout, "+---> Failure - build interrupted")
+			return "interrupted"
+		case <-time.After(20 * time.Second):
+			fmt.Fprintln(stdout, "|")
+		}
+	}
+}
+
+func release(what string, queue chan bool, request rpc.RemoteRequest) {
+	<-queue
+	fmt.Fprintf(request.Stdout(), "+---> Releasing %v\n", what)
 }
 
 func resolve(req rpc.RemoteRequest, retCode byte, start time.Time, err error) {
@@ -128,42 +152,4 @@ func resolve(req rpc.RemoteRequest, retCode byte, start time.Time, err error) {
 		retValue.Error = err.Error()
 	}
 	req.Resolve(retCode, retValue)
-}
-
-func ensureProjectWorkspace(workspace string, repoURL *net.URL) (ws string, err error) {
-	// Generate the project workspace path from the global workspace and
-	// the repository URL so that the same repository names do not collide
-	// unless the whole repository URLs are the same.
-	ws = filepath.Join(workspace, repoURL.Host, repoURL.Path)
-
-	// Make sure the project workspace exists.
-	err = os.Stat(ws)
-	if err != nil {
-		if os.IsNotExist(err) {
-			err = os.MkdirAll(ws, 0750)
-		}
-	}
-	return
-}
-
-func acquire(what string, queue chan bool, request rpc.RemoteRequest) (err string) {
-	stdout := request.Stdout()
-	fmt.Fprintf(stdout, "---> Waiting for %v\n", desc)
-	for {
-		select {
-		case queue <- true:
-			fmt.Fprintf(stdout, "---> Acquired %v", s)
-			return
-		case <-request.Interrupted():
-			fmt.Fprintln(stdout, "---> Build interrupted")
-			return "interrupted"
-		case <-time.After(20 * time.Second):
-			fmt.Fprintln(stdout, "---> ...")
-		}
-	}
-}
-
-func release(what string, queue chan bool, request rpc.RemoteRequest) {
-	<-queue
-	fmt.Fprintf(request.Stdout(), "---> Releasing %v\n", what)
 }

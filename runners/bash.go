@@ -19,10 +19,15 @@ package runners
 
 import "os/exec"
 
-var Bash = &Runner{
-	Name:      "bash",
-	Available: exec.Command("bash", "--version").Run() == nil,
-	Factory: func() *exec.Cmd {
-		return exec.Command("bash")
-	},
+func bashFactory() *Runner {
+	if exec.Command("bash", "--version").Run() != nil {
+		return nil
+	}
+
+	return &Runner{
+		Name: "bash",
+		NewCommand: func(script string) *exec.Cmd {
+			return exec.Command("bash", script)
+		},
+	}
 }

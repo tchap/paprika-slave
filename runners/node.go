@@ -19,10 +19,15 @@ package runners
 
 import "os/exec"
 
-var Node = &Runner{
-	Name:      "node",
-	Available: exec.Command("node", "--version").Run() == nil,
-	Factory: func() *exec.Cmd {
-		return exec.Command("node", "-e")
-	},
+func nodeFactory() *Runner {
+	if exec.Command("node", "--version").Run() != nil {
+		return nil
+	}
+
+	return &Runner{
+		Name: "node",
+		NewCommand: func(script string) *exec.Cmd {
+			return exec.Command("node", "-e", script)
+		},
+	}
 }

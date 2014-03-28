@@ -20,21 +20,26 @@ package runners
 import "os/exec"
 
 type Runner struct {
-	Name      string
-	Available bool
-	Factory   func() *exec.Cmd
+	Name       string
+	NewCommand func(script string) *exec.Cmd
 }
 
-var runners = [...]*Runner{
-	Bash,
-	Node,
+var factories = [...]func() *Runner{
+	bashFactory,
+	nodeFactory,
 }
 
 var Available = make([]*Runner, 0)
 
 func init() {
-	for _, runner := range runners {
-		if runner.Available {
+	ch := make(chan *Runner, len(factories))
+	for i := range factories {
+		go func(index int) {
+			ch <- factories[index]()
+		}(i)
+	}
+	for _ = range factories {
+		if runner := <-ch; runner != nil {
 			Available = append(Available, runner)
 		}
 	}
