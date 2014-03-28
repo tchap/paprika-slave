@@ -17,7 +17,13 @@
 
 package main
 
-import "sync"
+import (
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sync"
+)
 
 type WorkspaceManager struct {
 	root   string
@@ -47,11 +53,11 @@ func (wm *WorkspaceManager) GetWorkspaceQueue(ws string) chan bool {
 	return q
 }
 
-func (wm *WorkspaceManager) EnsureWorkspaceExists(repoURL *net.URL) (ws string, err error) {
+func (wm *WorkspaceManager) EnsureWorkspaceExists(repoURL *url.URL) (ws string, err error) {
 	// Generate the project workspace path from the global workspace and
 	// the repository URL so that the same repository names do not collide
 	// unless the whole repository URLs are the same.
-	ws = filepath.Join(root, repoURL.Host, repoURL.Path)
+	ws = filepath.Join(wm.root, repoURL.Host, repoURL.Path)
 
 	// Make sure the project workspace exists.
 	err = ensureDirectoryExists(ws)
@@ -63,11 +69,12 @@ func (mw *WorkspaceManager) SrcDir(workspace string) (srcDir string) {
 }
 
 func (wm *WorkspaceManager) SrcDirExists(workspace string) (exists bool, err error) {
-	return checkDirectoryExists(ws.SrcDir(workspace))
+	return checkDirectoryExists(wm.SrcDir(workspace))
 }
 
 func checkDirectoryExists(path string) (exists bool, err error) {
-	err = os.Stat(path)
+	var info os.FileInfo
+	info, err = os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			err = nil
@@ -76,6 +83,10 @@ func checkDirectoryExists(path string) (exists bool, err error) {
 		return
 	}
 	exists = true
+
+	if !info.IsDir() {
+		err = fmt.Errorf("not a directory: %v", path)
+	}
 	return
 }
 

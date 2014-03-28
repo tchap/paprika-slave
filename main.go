@@ -20,12 +20,16 @@ package main
 import (
 	// Stdlib
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"runtime"
 	"strings"
 	"syscall"
+
+	// Paprika
+	"github.com/salsita-cider/paprika-slave/runners"
 
 	// Cider
 	"github.com/cider/go-cider/cider/services/rpc"
@@ -52,7 +56,7 @@ func main() {
 	getenvOrFailNow(fidentity, "PAPRIKA_IDENTITY", "")
 	getenvOrFailNow(fmaster, "PAPRIKA_MASTER", "")
 	getenvOrFailNow(ftoken, "PAPRIKA_TOKEN", "")
-	getenvOrFailNow(ftags, "PAPRIKA_LABELS", "")
+	getenvOrFailNow(flabels, "PAPRIKA_LABELS", "")
 	getenvOrFailNow(fworkspace, "PAPRIKA_WORKSPACE", "")
 
 	// Start catching signals.
@@ -77,15 +81,21 @@ func main() {
 	// specified length. Every time a build is requested, the request handler
 	// sends some data to the channel, and when it is finished, it reads data
 	// from the same channel.
-	executorCh := make(chan bool, *fexecutors)
+	execQueue := make(chan bool, *fexecutors)
 
 	// Export all available runners.
+	fmt.Println("Available runners:")
+	for _, runner := range runners.Available {
+		log.Printf("  %v\n", runner.Name)
+	}
+
+	manager := newWorkspaceManager(*fworkspace)
+
 	for _, label := range strings.Split(*flabels, ",") {
 		for _, runner := range runners.Available {
 			methodName := label + "." + runner.Name
-			builder := &Builder{runner, *fworkspace, executorCh}
+			builder := &Builder{runner, manager, execQueue}
 			srv.MustRegister(methodName, builder.Build)
-			log.Printf("--> method %v exported\n", methodName)
 		}
 	}
 

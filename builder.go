@@ -18,10 +18,18 @@
 package main
 
 import (
+	// Stdlib
 	"fmt"
+	"net/url"
+	"os"
+	"time"
 
+	// Paprika
 	"github.com/salsita-cider/paprika/data"
 
+	// Cider
+	"github.com/cider/cider/apps/utils/executil"
+	"github.com/cider/cider/apps/utils/vcsutil"
 	"github.com/cider/go-cider/cider/services/rpc"
 	"github.com/salsita-cider/paprika-slave/runners"
 )
@@ -39,7 +47,7 @@ func (builder *Builder) Build(request rpc.RemoteRequest) {
 
 	// Unmarshal and validate the input data.
 	var args data.BuildArgs
-	if err := request.UnmarshalArguments(&args); err != nil {
+	if err := request.UnmarshalArgs(&args); err != nil {
 		request.Resolve(2, &data.BuildResult{Error: err.Error()})
 		return
 	}
@@ -57,16 +65,16 @@ func (builder *Builder) Build(request rpc.RemoteRequest) {
 	}
 
 	// Acquire the workspace lock.
-	wsQueue := builder.manager.WorkspaceQueue(workspace)
-	if err := acquire("the workspace lock", wsQueue, request); err != nil {
-		request.Resolve(5, &data.BuildResult{Error: err})
+	wsQueue := builder.manager.GetWorkspaceQueue(workspace)
+	if errStr := acquire("the workspace lock", wsQueue, request); errStr != "" {
+		request.Resolve(5, &data.BuildResult{Error: errStr})
 		return
 	}
 	defer release("the workspace lock", wsQueue, request)
 
 	// Acquire a build executor.
-	if err := acquire("a build executor", builder.execQueue, request); err != nil {
-		request.Resolve(5, &data.BuildResult{Error: err})
+	if errStr := acquire("a build executor", builder.execQueue, request); errStr != "" {
+		request.Resolve(5, &data.BuildResult{Error: errStr})
 		return
 	}
 	defer release("the build executor", builder.execQueue, request)
@@ -124,16 +132,16 @@ func (builder *Builder) Build(request rpc.RemoteRequest) {
 
 func acquire(what string, queue chan bool, request rpc.RemoteRequest) (err string) {
 	stdout := request.Stdout()
-	fmt.Fprintf(stdout, "+---> Trying to acquire %v\n", desc)
+	fmt.Fprintf(stdout, "+---> Trying to acquire %v\n", what)
 	for {
 		select {
 		case queue <- true:
-			fmt.Fprintf(stdout, "+---> Success", s)
+			fmt.Fprintln(stdout, "+---> Success")
 			return
 		case <-request.Interrupted():
 			fmt.Fprintln(stdout, "+---> Failure - build interrupted")
 			return "interrupted"
-		case <-time.After(20 * time.Second):
+		case <-time.After(30 * time.Second):
 			fmt.Fprintln(stdout, "|")
 		}
 	}
@@ -144,7 +152,7 @@ func release(what string, queue chan bool, request rpc.RemoteRequest) {
 	fmt.Fprintf(request.Stdout(), "+---> Releasing %v\n", what)
 }
 
-func resolve(req rpc.RemoteRequest, retCode byte, start time.Time, err error) {
+func resolve(req rpc.RemoteRequest, retCode rpc.ReturnCode, start time.Time, err error) {
 	retValue := &data.BuildResult{
 		Duration: time.Now().Sub(start),
 	}
