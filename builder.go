@@ -90,7 +90,7 @@ func (builder *Builder) Build(request rpc.RemoteRequest) {
 		return
 	}
 
-	vcs, err := vcsutil.NewVCS(repoURL.Scheme)
+	vcs, err := vcsutil.GetVCS(repoURL.Scheme)
 	if err != nil {
 		resolve(request, 7, startTimestamp, err)
 		return

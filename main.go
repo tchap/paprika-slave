@@ -42,6 +42,7 @@ import (
 const TokenHeader = "X-Paprika-Token"
 
 func main() {
+	var exitCode int
 	log.SetFlags(0)
 
 	// Parse the command line.
@@ -95,22 +96,32 @@ func main() {
 		for _, runner := range runners.Available {
 			methodName := label + "." + runner.Name
 			builder := &Builder{runner, manager, execQueue}
-			srv.MustRegister(methodName, builder.Build)
+			if err := srv.RegisterMethod(methodName, builder.Build); err != nil {
+				log.Print(err)
+				exitCode = 1
+				goto Close
+			}
 		}
 	}
 
-	// Block until either there is an error or a signal is received.
+	// Block until either there is a fatal error or a signal is received.
 	select {
 	case <-srv.Closed():
+		goto Wait
 	case <-signalCh:
-		if err := srv.Close(); err != nil {
-			log.Fatal(err)
-		}
+		goto Close
 	}
 
+Close:
+	if err := srv.Close(); err != nil {
+		log.Fatal(err)
+	}
+Wait:
 	if err := srv.Wait(); err != nil {
 		log.Fatal(err)
 	}
+
+	os.Exit(exitCode)
 }
 
 func getenvOrFailNow(value *string, key string, defaultValue string) {
